@@ -65,7 +65,7 @@ jobs:
         if: startsWith(github.event.inputs.type_analyse, 'auto')
         run: |
           echo "Exécution de l analyse automatique, maximum ${{ github.event.inputs.repos_max }} dépôts"
-          python scan_github.py --auto --max-repos ${{ github.event.inputs.repos_max }}
+          python scan_github.py --auto --depots-max ${{ github.event.inputs.repos_max }}
       
       - name: 🔍 Exécution de l analyse - Mode Utilisateur
         if: startsWith(github.event.inputs.type_analyse, 'utilisateur')
