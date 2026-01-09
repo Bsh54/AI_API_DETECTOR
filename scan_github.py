@@ -94,8 +94,8 @@ Exemples d'utilisation:
     parser.add_argument(
         '--depots-max',
         type=int,
-        default=50,
-        help='Nombre maximum de dépôts à scanner en mode automatique (par défaut: 50)'
+        default=200,
+        help='Nombre maximum de dépôts à scanner en mode automatique (par défaut: 200)'
     )
     
     parser.add_argument(
