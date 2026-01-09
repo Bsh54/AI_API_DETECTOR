@@ -111,49 +111,7 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
       
-      - name: 💾 Soumission de l historique et des rapports d analyse
-        if: always()
-        run: |
-          git config user.name "Bsh54"
-          git config user.email "shadrakbsh@gmail.com"
-          
-          # Ajout de l historique d analyse
-          git add historique_analyse/
-          
-          # Ajout des rapports d analyse
-          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse 2>/dev/null)" ]; then
-            git add rapports_analyse/
-            echo "✅ Rapports d analyse détectés, seront soumis ensemble"
-          fi
-          
-          # Vérification des modifications
-          if git diff --cached --quiet; then
-            echo "Aucun nouvel historique ou rapport d analyse"
-          else
-            # Statistiques
-            HISTORIQUE_MODIFIE=$(git diff --cached --name-only | grep "historique_analyse/" | wc -l | tr -d ' ')
-            RAPPORTS_MODIFIES=$(git diff --cached --name-only | grep "rapports_analyse/" | wc -l | tr -d ' ')
-            
-            # Message de commit
-            MSG_COMMIT="📝 Mise à jour des données d analyse [skip ci]"
-            if [ "$HISTORIQUE_MODIFIE" -gt 0 ] && [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
-              MSG_COMMIT="📝 Mise à jour de l historique et des rapports d analyse [skip ci]"
-            elif [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
-              MSG_COMMIT="📄 Ajout de rapports d analyse [skip ci]"
-            fi
-            
-            git commit -m "$MSG_COMMIT"
-            
-            # Synchronisation des modifications distantes pour éviter les conflits de push concurrents
-            git pull --rebase origin main || {
-              echo "⚠️ Conflit de rebase, tentative avec la version locale"
-              git rebase --abort
-              git pull --rebase --strategy-option=ours origin main
-            }
-            
-            git push
-            echo "✅ Soumis : $HISTORIQUE_MODIFIE fichier(s) d historique, $RAPPORTS_MODIFIES fichier(s) de rapport"
-          fi
+      
       
       - name: 🔔 Analyse des résultats
         id: analyser_resultats
