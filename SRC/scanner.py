@@ -2,11 +2,11 @@ import os
 import time
 from datetime import datetime
 from typing import List, Dict, Optional
-from .config import Config
-from .secret_detector import SecretDetector
-from .github_scanner import GitHubScanner
-from .report_generator import ReportGenerator
-from .scan_history import ScanHistory
+from src.config import Config
+from src.secret_detector import SecretDetector
+from src.github_scanner import GitHubScanner
+from src.report_generator import ReportGenerator
+from src.scan_history import ScanHistory
 
 class CloudScanner:
     """Scanner principal"""

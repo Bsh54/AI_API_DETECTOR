@@ -157,5 +157,4 @@ Généré le: 2024-01-15 10:45:16
 ────────────────────────────────────────
 1. Stockez les clés API dans des variables d'environnement
 2. Utilisez des fichiers .env (ajoutez-les à .gitignore)
-3. Pour GitHub, utilisez GitHub Secrets
-
+3. Pour GitHub, utilisez GitHub Secret
