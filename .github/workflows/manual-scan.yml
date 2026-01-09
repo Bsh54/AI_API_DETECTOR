@@ -1,0 +1,89 @@
+name: AI API Key Scanner - Manual Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type de scan'
+        required: true
+        type: choice
+        options:
+          - 'auto - Scan automatique des projets AI'
+          - 'user - Scan utilisateur spécifique'
+          - 'org - Scan organisation spécifique'
+          - 'repo - Scan dépôt unique'
+      target:
+        description: 'Cible du scan (utilisateur, org ou repo)'
+        required: false
+        type: string
+      max_repos:
+        description: 'Nombre maximum de dépôts'
+        required: false
+        type: number
+        default: 30
+      github_token:
+        description: 'Token GitHub (optionnel)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  manual-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🐍 Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: 📦 Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🔍 Exécution du scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN || inputs.github_token }}
+        run: |
+          case "${{ inputs.scan_type }}" in
+            "auto - Scan automatique des projets AI")
+              python scan_github.py --auto --max-repos ${{ inputs.max_repos || 30 }}
+              ;;
+            "user - Scan utilisateur spécifique")
+              python scan_github.py --user "${{ inputs.target }}" --max-repos ${{ inputs.max_repos || 30 }}
+              ;;
+            "org - Scan organisation spécifique")
+              python scan_github.py --org "${{ inputs.target }}" --max-repos ${{ inputs.max_repos || 30 }}
+              ;;
+            "repo - Scan dépôt unique")
+              python scan_github.py --repo "${{ inputs.target }}"
+              ;;
+          esac
+      
+      - name: 📊 Upload des rapports
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-report-${{ github.run_number }}
+          path: scan_reports/
+          retention-days: 90
+      
+      - name: 📁 Commit des rapports
+        if: always()
+        run: |
+          if [ -d "scan_reports" ] && [ -n "$(ls -A scan_reports)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add scan_reports/
+            git commit -m "📄 Ajout du rapport de scan #${{ github.run_number }} [skip ci]"
+            git push
+          fi

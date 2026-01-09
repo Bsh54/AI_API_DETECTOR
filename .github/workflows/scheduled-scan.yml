@@ -1,0 +1,53 @@
+name: AI API Key Scanner - Scheduled Scan
+
+on:
+  schedule:
+    # Exécution tous les jours à 2h00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Permet aussi une exécution manuelle
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  scheduled-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Installation des dépendances
+        run: |
+          pip install -r requirements.txt
+      
+      - name: 🔍 Scan automatique
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scan_github.py --auto --max-repos 20 --timeout 45
+      
+      - name: 📊 Upload des rapports
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-scan-${{ github.run_id }}
+          path: scan_reports/
+          retention-days: 30
+      
+      - name: 📈 Création d'Issue en cas de problème
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '⚠️ Échec du scan automatique',
+              body: `Le scan automatique a échoué. Vérifiez les logs.`,
+              labels: ['scan-error', 'automation']
+            });
