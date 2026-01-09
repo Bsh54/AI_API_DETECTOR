@@ -1,0 +1,243 @@
+name: Scanner de Clés API IA - Analyse Manuelle
+
+# Déclenchement manuel uniquement
+on:
+  workflow_dispatch:
+    inputs:
+      type_analyse:
+        description: 'Type d analyse'
+        required: true
+        type: choice
+        options:
+          - 'auto - Recherche automatique de projets IA'
+          - 'utilisateur - Analyse d un utilisateur spécifique'
+          - 'organisation - Analyse d une organisation spécifique'
+          - 'depot - Analyse d un dépôt unique'
+      
+      cible:
+        description: 'Cible d analyse (nom d utilisateur/organisation/dépôt complet, peut être vide en mode auto)'
+        required: false
+        type: string
+        default: ''
+      
+      repos_max:
+        description: 'Nombre maximum de dépôts à analyser (valide uniquement en mode auto)'
+        required: false
+        type: number
+        default: 50
+      
+      creer_issue:
+        description: 'Créer une Issue si des problèmes sont détectés'
+        required: false
+        type: boolean
+        default: true
+
+# Configuration des autorisations
+permissions:
+  contents: write  # Permet de soumettre du code
+  issues: write    # Permet de créer des Issues
+
+jobs:
+  analyse-manuelle:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Récupération du code
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Configuration de Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: ⚙️ Configuration de l environnement
+        run: |
+          echo "GITHUB_TOKEN=${{ secrets.GH_SCAN_TOKEN }}" > .env
+          echo "OUTPUT_DIR=./rapports_analyse" >> .env
+          mkdir -p rapports_analyse
+      
+      - name: 🔍 Exécution de l analyse - Mode Auto
+        if: startsWith(github.event.inputs.type_analyse, 'auto')
+        run: |
+          echo "Exécution de l analyse automatique, maximum ${{ github.event.inputs.repos_max }} dépôts"
+          python scan_github.py --auto --max-repos ${{ github.event.inputs.repos_max }}
+      
+      - name: 🔍 Exécution de l analyse - Mode Utilisateur
+        if: startsWith(github.event.inputs.type_analyse, 'utilisateur')
+        run: |
+          echo "Analyse de l utilisateur: ${{ github.event.inputs.cible }}"
+          python scan_github.py --user "${{ github.event.inputs.cible }}"
+      
+      - name: 🔍 Exécution de l analyse - Mode Organisation
+        if: startsWith(github.event.inputs.type_analyse, 'organisation')
+        run: |
+          echo "Analyse de l organisation: ${{ github.event.inputs.cible }}"
+          python scan_github.py --org "${{ github.event.inputs.cible }}"
+      
+      - name: 🔍 Exécution de l analyse - Mode Dépôt
+        if: startsWith(github.event.inputs.type_analyse, 'depot')
+        run: |
+          echo "Analyse du dépôt: ${{ github.event.inputs.cible }}"
+          python scan_github.py --repo "${{ github.event.inputs.cible }}"
+      
+      - name: 📊 Génération du résumé d analyse
+        if: always()
+        run: |
+          echo "# 🔍 Analyse terminée" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Type d analyse**: ${{ github.event.inputs.type_analyse }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cible d analyse**: ${{ github.event.inputs.cible }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Heure d exécution**: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f rapports_analyse/*.txt ]; then
+            echo "## 📄 Résultats d analyse" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -n 80 rapports_analyse/*.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: 📤 Téléversement du rapport
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-analyse-manuelle-${{ github.run_number }}
+          path: rapports_analyse/
+          retention-days: 90
+          if-no-files-found: ignore
+      
+      - name: 💾 Soumission de l historique et des rapports d analyse
+        if: always()
+        run: |
+          git config user.name "Bsh54"
+          git config user.email "shadrakbsh@gmail.com"
+          
+          # Ajout de l historique d analyse
+          git add historique_analyse/
+          
+          # Ajout des rapports d analyse
+          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse 2>/dev/null)" ]; then
+            git add rapports_analyse/
+            echo "✅ Rapports d analyse détectés, seront soumis ensemble"
+          fi
+          
+          # Vérification des modifications
+          if git diff --cached --quiet; then
+            echo "Aucun nouvel historique ou rapport d analyse"
+          else
+            # Statistiques
+            HISTORIQUE_MODIFIE=$(git diff --cached --name-only | grep "historique_analyse/" | wc -l | tr -d ' ')
+            RAPPORTS_MODIFIES=$(git diff --cached --name-only | grep "rapports_analyse/" | wc -l | tr -d ' ')
+            
+            # Message de commit
+            MSG_COMMIT="📝 Mise à jour des données d analyse [skip ci]"
+            if [ "$HISTORIQUE_MODIFIE" -gt 0 ] && [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📝 Mise à jour de l historique et des rapports d analyse [skip ci]"
+            elif [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📄 Ajout de rapports d analyse [skip ci]"
+            fi
+            
+            git commit -m "$MSG_COMMIT"
+            
+            # Synchronisation des modifications distantes pour éviter les conflits de push concurrents
+            git pull --rebase origin main || {
+              echo "⚠️ Conflit de rebase, tentative avec la version locale"
+              git rebase --abort
+              git pull --rebase --strategy-option=ours origin main
+            }
+            
+            git push
+            echo "✅ Soumis : $HISTORIQUE_MODIFIE fichier(s) d historique, $RAPPORTS_MODIFIES fichier(s) de rapport"
+          fi
+      
+      - name: 🔔 Analyse des résultats
+        id: analyser_resultats
+        if: always()
+        run: |
+          if [ -f rapports_analyse/*.txt ]; then
+            PROBLEMES=$(grep "Nombre total de problèmes détectés:" rapports_analyse/*.txt | grep -oE '[0-9]+' || echo "0")
+            echo "$PROBLEMES problème(s) potentiel(s) détecté(s)"
+            echo "nombre_problemes=$PROBLEMES" >> $GITHUB_OUTPUT
+            
+            if [ "$PROBLEMES" -gt 0 ]; then
+              echo "problemes_detectes=true" >> $GITHUB_OUTPUT
+            else
+              echo "problemes_detectes=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "nombre_problemes=0" >> $GITHUB_OUTPUT
+            echo "problemes_detectes=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 📢 Création d Issue d alerte
+        if: |
+          always() && 
+          github.event.inputs.creer_issue == 'true' && 
+          steps.analyser_resultats.outputs.problemes_detectes == 'true'
+        uses: actions/github-script@v7
+        env:
+          NOMBRE_PROBLEMES: ${{ steps.analyser_resultats.outputs.nombre_problemes }}
+          TYPE_ANALYSE: ${{ github.event.inputs.type_analyse }}
+          CIBLE_ANALYSE: ${{ github.event.inputs.cible }}
+        with:
+          script: |
+            const fs = require('fs');
+            const dossierRapport = 'rapports_analyse';
+            const nombreProblemes = process.env.NOMBRE_PROBLEMES;
+            const typeAnalyse = process.env.TYPE_ANALYSE;
+            const cibleAnalyse = process.env.CIBLE_ANALYSE;
+            
+            if (fs.existsSync(dossierRapport)) {
+              const fichiers = fs.readdirSync(dossierRapport);
+              if (fichiers.length > 0) {
+                const cheminRapport = `${dossierRapport}/${fichiers[0]}`;
+                const contenu = fs.readFileSync(cheminRapport, 'utf8');
+                const apercu = contenu.split('\n').slice(0, 120).join('\n');
+                
+                const titreIssue = `🚨 [Analyse Manuelle] ${nombreProblemes} fuite(s) potentielle(s) de clés détectée(s)`;
+                const corpsIssue = [
+                  '# 🔍 Rapport d analyse manuelle',
+                  '',
+                  '## Informations d analyse',
+                  '',
+                  `- Type d analyse: ${typeAnalyse}`,
+                  `- Cible d analyse: ${cibleAnalyse}`,
+                  `- Heure d exécution: ${new Date().toLocaleString('fr-FR')}`,
+                  `- Nombre de problèmes détectés: ${nombreProblemes}`,
+                  `- Exécution Workflow: [#${context.runNumber}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                  '',
+                  '## 📄 Aperçu du rapport',
+                  '',
+                  '```',
+                  apercu,
+                  '```',
+                  '',
+                  '## 🔗 Rapport complet',
+                  '',
+                  `Téléchargez le rapport complet depuis [Artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
+                  '',
+                  '## ⚠️ Actions recommandées',
+                  '',
+                  '1. Vérifier immédiatement les problèmes à haute confiance signalés',
+                  '2. Rotationner toutes les clés API compromises',
+                  '3. Utiliser des variables d environnement ou un service de gestion de secrets',
+                  '4. Mettre à jour .gitignore pour prévenir les futures fuites',
+                  '',
+                  '---',
+                  '*Cette Issue a été créée automatiquement par GitHub Actions*'
+                ].join('\n');
+                
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: titreIssue,
+                  body: corpsIssue,
+                  labels: ['securité', 'analyse-manuelle', 'a-reviser']
+                });
+              }
+            }

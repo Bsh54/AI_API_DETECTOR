@@ -1,0 +1,194 @@
+
+name: Scanner de Clés API IA - Analyse Automatique
+
+# Conditions de déclenchement
+on:
+
+  schedule:
+    - cron: '0 23 * * *'  # Exécution quotidienne
+    
+  
+  # Déclenchement manuel
+  workflow_dispatch:
+    inputs:
+      mode_analyse:
+        description: 'Mode d analyse'
+        required: true
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - utilisateur
+          - organisation
+      cible:
+        description: 'Cible de l analyse (nom d utilisateur ou d organisation, peut être vide en mode auto)'
+        required: false
+        type: string
+      repos_max:
+        description: 'Nombre maximum de dépôts à analyser'
+        required: false
+        default: '50'
+        type: string
+
+# Configuration des autorisations
+permissions:
+  contents: write  # Permet de soumettre du code
+  issues: write    # Permet de créer des Issues
+
+# Définition des tâches
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Récupération du code
+      - name: 📥 Récupération du code
+        uses: actions/checkout@v4
+      
+      # 2. Configuration de l environnement Python
+      - name: 🐍 Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      # 3. Installation des dépendances
+      - name: 📦 Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # 4. Création du fichier de variables d environnement
+      - name: ⚙️ Configuration des variables d environnement
+        run: |
+          echo "GITHUB_TOKEN=${{ secrets.GH_SCAN_TOKEN }}" > .env
+          echo "OUTPUT_DIR=./rapports_analyse" >> .env
+      
+      # 5. Exécution de l analyse (tâche planifiée)
+      - name: 🔍 Exécution de l analyse automatique
+        if: github.event_name == 'schedule'
+        run: |
+          python scan_github.py --auto --max-repos 50
+      
+      # 6. Exécution de l analyse (déclenchement manuel - mode auto)
+      - name: 🔍 Exécution de l analyse (auto)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode_analyse == 'auto'
+        run: |
+          python scan_github.py --auto --max-repos ${{ github.event.inputs.repos_max }}
+      
+      # 7. Exécution de l analyse (déclenchement manuel - mode utilisateur)
+      - name: 🔍 Exécution de l analyse (utilisateur)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode_analyse == 'utilisateur'
+        run: |
+          python scan_github.py --user ${{ github.event.inputs.cible }}
+      
+      # 8. Exécution de l analyse (déclenchement manuel - mode organisation)
+      - name: 🔍 Exécution de l analyse (organisation)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode_analyse == 'organisation'
+        run: |
+          python scan_github.py --org ${{ github.event.inputs.cible }}
+      
+      # 9. Téléversement du rapport d analyse
+      - name: 📤 Téléversement du rapport d analyse
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-analyse-${{ github.run_number }}
+          path: rapports_analyse/
+          retention-days: 90
+          if-no-files-found: ignore
+      
+      # 10. Soumission de l historique d analyse et des rapports
+      - name: 💾 Soumission de l historique et des rapports d analyse
+        if: always()
+        run: |
+          git config user.name "gaocaipeng"
+          git config user.email "2540225402@qq.com"
+          
+          # Ajout de l historique d analyse
+          git add historique_analyse/
+          
+          # Ajout des rapports d analyse
+          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse 2>/dev/null)" ]; then
+            git add rapports_analyse/
+            echo "✅ Rapports d analyse détectés, seront soumis ensemble"
+          fi
+          
+          # Vérification des modifications
+          if git diff --cached --quiet; then
+            echo "Aucun nouvel historique ou rapport d analyse"
+          else
+            # Statistiques
+            HISTORIQUE_MODIFIE=$(git diff --cached --name-only | grep "historique_analyse/" | wc -l | tr -d ' ')
+            RAPPORTS_MODIFIES=$(git diff --cached --name-only | grep "rapports_analyse/" | wc -l | tr -d ' ')
+            
+            # Message de commit
+            MSG_COMMIT="📝 Mise à jour des données d analyse [skip ci]"
+            if [ "$HISTORIQUE_MODIFIE" -gt 0 ] && [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📝 Mise à jour de l historique et des rapports d analyse [skip ci]"
+            elif [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📄 Ajout de rapports d analyse [skip ci]"
+            fi
+            
+            git commit -m "$MSG_COMMIT"
+            
+            # Synchronisation des modifications distantes pour éviter les conflits de push concurrents
+            git pull --rebase origin main || {
+              echo "⚠️ Conflit de rebase, tentative avec la version locale"
+              git rebase --abort
+              git pull --rebase --strategy-option=ours origin main
+            }
+            
+            git push
+            echo "✅ Soumis : $HISTORIQUE_MODIFIE fichier(s) d historique, $RAPPORTS_MODIFIES fichier(s) de rapport"
+          fi
+      
+      # 11. Affichage du résumé du rapport
+      - name: 📊 Affichage du résumé de l analyse
+        if: always()
+        run: |
+          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse)" ]; then
+            echo "## 📋 Rapport d analyse généré avec succès" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📁 Fichiers de rapport :" >> $GITHUB_STEP_SUMMARY
+            ls -lh rapports_analyse/ >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📄 Aperçu du rapport (50 premières lignes) :" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -n 50 rapports_analyse/*.txt | tail -n 50 >> $GITHUB_STEP_SUMMARY || echo "Impossible de lire le contenu du rapport" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Aucun fichier de rapport généré" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      # 11. Optionnel : Envoi de notification (si des problèmes sont détectés)
+      - name: 🔔 Vérification des problèmes détectés
+        id: verification_problemes
+        run: |
+          if grep -q "Nombre total de problèmes détectés: [1-9]" rapports_analyse/*.txt 2>/dev/null; then
+            echo "Problèmes détectés"
+            echo "problemes_detectes=true" >> $GITHUB_OUTPUT
+          else
+            echo "Aucun problème détecté"
+            echo "problemes_detectes=false" >> $GITHUB_OUTPUT
+          fi
+      
+      # 12. Optionnel : Création d Issue (si des problèmes critiques sont détectés)
+      - name: 📢 Création d Issue d alerte
+        if: steps.verification_problemes.outputs.problemes_detectes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const fichiersRapport = fs.readdirSync('rapports_analyse');
+            if (fichiersRapport.length > 0) {
+              const contenuRapport = fs.readFileSync(`rapports_analyse/${fichiersRapport[0]}`, 'utf8');
+              const lignes = contenuRapport.split('\n').slice(0, 100).join('\n');
+              
+              github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `⚠️ Analyse de sécurité - Fuite potentielle de clés détectée - ${new Date().toISOString().split('T')[0]}`,
+                body: `# 🔍 Rapport d analyse automatique\n\nCette analyse a détecté des fuites potentielles de clés API.\n\n**Heure de l analyse**: ${new Date().toISOString()}\n**ID d exécution**: #${context.runNumber}\n\n## 📄 Résumé du rapport\n\n\`\`\`\n${lignes}\n\`\`\`\n\nConsultez le rapport complet dans [Artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                labels: ['securité', 'analyse-auto']
+              });
+            }

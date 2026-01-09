@@ -1,0 +1,312 @@
+name: Scanner de Clés API IA - Analyse Planifiée
+
+# Options multiples de déclenchement planifié
+on:
+  schedule:
+    
+    - cron: '0 23 * * *'
+    
+    # Autres horaires possibles, décommentez pour activer :
+    # - cron: '0 */6 * * *'    # Toutes les 6 heures
+    # - cron: '0 0,12 * * *'   # Quotidien à 00:00 et 12:00
+    # - cron: '0 2 * * 1'      # Lundi à 02:00
+    # - cron: '0 2 1 * *'      # 1er du mois à 02:00
+  
+  # Déclenchement manuel également supporté
+  workflow_dispatch:
+
+# Contrôle de concurrence - une seule tâche d'analyse à la fois
+concurrency:
+  group: analyse-planifiee
+  cancel-in-progress: false
+
+# Configuration des autorisations
+permissions:
+  contents: write  # Permet de soumettre du code
+  issues: write    # Permet de créer et mettre à jour les Issues
+
+jobs:
+  analyse-planifiee:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # Délai d'expiration de 60 minutes
+    
+    steps:
+      - name: 📅 Affichage de l'heure d'exécution
+        run: |
+          echo "🕐 Heure actuelle (UTC) : $(date -u)"
+          
+      
+      - name: 📥 Récupération du code
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: 📦 Installation des dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: ⚙️ Configuration de l'environnement
+        env:
+          GITHUB_SCAN_TOKEN: ${{ secrets.GH_SCAN_TOKEN }}
+        run: |
+          echo "GITHUB_TOKEN=${GITHUB_SCAN_TOKEN}" > .env
+          echo "OUTPUT_DIR=./rapports_analyse" >> .env
+          mkdir -p rapports_analyse
+      
+      - name: 🔍 Exécution de l'analyse planifiée
+        id: analyse
+        run: |
+          echo "Démarrage de la tâche d'analyse automatique..."
+          python scan_github.py --auto --max-repos 50 2>&1 | tee journal_analyse.log
+          
+          # Enregistrement du statut de l'analyse
+          if [ $? -eq 0 ]; then
+            echo "statut_analyse=succes" >> $GITHUB_OUTPUT
+          else
+            echo "statut_analyse=echec" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 📊 Analyse des résultats
+        id: analyser
+        if: always()
+        run: |
+          # Vérification de la génération de rapports
+          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse)" ]; then
+            FICHIER_RAPPORT=$(ls -t rapports_analyse/*.txt | head -1)
+            
+            # Extraction du nombre de problèmes détectés
+            TOTAL=$(grep "Nombre total de problèmes détectés:" "$FICHIER_RAPPORT" | grep -oE '[0-9]+' || echo "0")
+            ELEVE=$(grep "Confiance élevée:" "$FICHIER_RAPPORT" | grep -oE '[0-9]+' || echo "0")
+            MOYEN=$(grep "Confiance moyenne:" "$FICHIER_RAPPORT" | grep -oE '[0-9]+' || echo "0")
+            
+            echo "problemes_totaux=$TOTAL" >> $GITHUB_OUTPUT
+            echo "confiance_elevee=$ELEVE" >> $GITHUB_OUTPUT
+            echo "confiance_moyenne=$MOYEN" >> $GITHUB_OUTPUT
+            
+            echo "📊 Statistiques de l'analyse :"
+            echo "  - Total des problèmes : $TOTAL"
+            echo "  - Confiance élevée : $ELEVE"
+            echo "  - Confiance moyenne : $MOYEN"
+            
+            # Détermination de la nécessité d'une alerte
+            if [ "$TOTAL" -gt 0 ]; then
+              echo "alerte_necessaire=true" >> $GITHUB_OUTPUT
+            else
+              echo "alerte_necessaire=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ Aucun rapport d'analyse trouvé"
+            echo "problemes_totaux=0" >> $GITHUB_OUTPUT
+            echo "alerte_necessaire=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 📝 Génération du résumé
+        if: always()
+        run: |
+          echo "# 🔍 Rapport d'analyse planifiée" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Heure d'exécution** : $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode d'analyse** : Recherche automatique de projets IA" >> $GITHUB_STEP_SUMMARY
+          echo "**Statut de l'analyse** : ${{ steps.analyse.outputs.statut_analyse }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Vérification de l'existence de fichiers txt
+          if ls rapports_analyse/*.txt 1> /dev/null 2>&1; then
+            echo "## 📊 Statistiques de l'analyse" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔴 Problèmes de confiance élevée : ${{ steps.analyser.outputs.confiance_elevee }}" >> $GITHUB_STEP_SUMMARY
+            echo "- 🟡 Problèmes de confiance moyenne : ${{ steps.analyser.outputs.confiance_moyenne }}" >> $GITHUB_STEP_SUMMARY
+            echo "- 📦 Total des problèmes : ${{ steps.analyser.outputs.problemes_totaux }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "## 📄 Aperçu du rapport" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -n 100 rapports_analyse/*.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: 📤 Téléversement du rapport
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyse-planifiee-${{ github.run_number }}
+          path: |
+            rapports_analyse/
+            journal_analyse.log
+          retention-days: 90
+          if-no-files-found: ignore
+      
+      - name: 💾 Soumission de l'historique et des rapports d'analyse
+        if: always()
+        run: |
+          git config user.name "Bsh54"
+          git config user.email "shadrakbsh@gmail.com"
+          
+          # Ajout de l'historique d'analyse
+          git add historique_analyse/
+          
+          # Ajout des rapports d'analyse
+          if [ -d "rapports_analyse" ] && [ "$(ls -A rapports_analyse 2>/dev/null)" ]; then
+            git add rapports_analyse/
+            echo "✅ Rapports d'analyse détectés, seront soumis ensemble"
+          fi
+          
+          # Vérification des modifications
+          if git diff --cached --quiet; then
+            echo "Aucun nouvel historique ou rapport d'analyse"
+          else
+            # Statistiques
+            HISTORIQUE_MODIFIE=$(git diff --cached --name-only | grep "historique_analyse/" | wc -l | tr -d ' ')
+            RAPPORTS_MODIFIES=$(git diff --cached --name-only | grep "rapports_analyse/" | wc -l | tr -d ' ')
+            
+            # Message de commit
+            MSG_COMMIT="📝 Mise à jour des données d'analyse [skip ci]"
+            if [ "$HISTORIQUE_MODIFIE" -gt 0 ] && [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📝 Mise à jour de l'historique et des rapports d'analyse [skip ci]"
+            elif [ "$RAPPORTS_MODIFIES" -gt 0 ]; then
+              MSG_COMMIT="📄 Ajout de rapports d'analyse [skip ci]"
+            fi
+            
+            git commit -m "$MSG_COMMIT"
+            
+            # Synchronisation des modifications distantes pour éviter les conflits
+            git pull --rebase origin main || {
+              echo "⚠️ Conflit de rebase, tentative avec la version locale"
+              git rebase --abort
+              git pull --rebase --strategy-option=ours origin main
+            }
+            
+            git push
+            echo "✅ Soumis : $HISTORIQUE_MODIFIE fichier(s) d'historique, $RAPPORTS_MODIFIES fichier(s) de rapport"
+          fi
+      
+      - name: 🚨 Création d'Issue d'alerte (si problèmes détectés)
+        if: steps.analyser.outputs.alerte_necessaire == 'true'
+        uses: actions/github-script@v7
+        env:
+          PROBLEMES_TOTAL: ${{ steps.analyser.outputs.problemes_totaux }}
+          CONFIANCE_ELEVEE: ${{ steps.analyser.outputs.confiance_elevee }}
+          CONFIANCE_MOYENNE: ${{ steps.analyser.outputs.confiance_moyenne }}
+        with:
+          script: |
+            const fs = require('fs');
+            const fichiersRapport = fs.readdirSync('rapports_analyse');
+            
+            if (fichiersRapport.length > 0) {
+              const cheminRapport = `rapports_analyse/${fichiersRapport[0]}`;
+              const contenu = fs.readFileSync(cheminRapport, 'utf8');
+              const apercu = contenu.split('\n').slice(0, 150).join('\n');
+              
+              const total = process.env.PROBLEMES_TOTAL;
+              const elevee = process.env.CONFIANCE_ELEVEE;
+              const moyenne = process.env.CONFIANCE_MOYENNE;
+              
+              // Vérification de l'existence d'une Issue du jour
+              const aujourdhui = new Date().toISOString().split('T')[0];
+              const issuesExistantes = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'analyse-auto,securite',
+                state: 'open'
+              });
+              
+              const issueDuJour = issuesExistantes.data.find(issue => 
+                issue.title.includes(aujourdhui)
+              );
+              
+              if (issueDuJour) {
+                // Mise à jour de l'Issue existante
+                const corpsMiseAJour = [
+                  '## 🔄 Mise à jour : nouvelles découvertes d\'analyse',
+                  '',
+                  `Heure de l'analyse : ${new Date().toLocaleString('fr-FR')}`,
+                  `Exécution : [#${context.runNumber}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                  '',
+                  '### 📊 Statistiques de cette analyse',
+                  `- 🔴 Confiance élevée : ${elevee}`,
+                  `- 🟡 Confiance moyenne : ${moyenne}`,
+                  `- 📦 Total : ${total}`,
+                  '',
+                  'Consultez les Artifacts pour le rapport complet.'
+                ].join('\n');
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueDuJour.number,
+                  body: corpsMiseAJour
+                });
+              } else {
+                // Création d'une nouvelle Issue
+                const alerteElevee = elevee > 0 ? '⚠️ Nécessite un traitement immédiat' : '';
+                const alerteMoyenne = moyenne > 0 ? '⚠️ Recommandé de vérifier' : '';
+                
+                const titreIssue = `🚨 [${aujourdhui}] Analyse de sécurité : ${total} fuite(s) potentielle(s) de clés détectée(s)`;
+                const corpsIssue = [
+                  '# 🔍 Alerte d\'analyse automatique',
+                  '',
+                  '## 📋 Informations d\'analyse',
+                  '',
+                  `- Date d'analyse : ${aujourdhui}`,
+                  `- Heure d'exécution : ${new Date().toLocaleString('fr-FR')}`,
+                  `- Workflow : [Exécution #${context.runNumber}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                  '',
+                  '## 📊 Statistiques des problèmes détectés',
+                  '',
+                  `- 🔴 Confiance élevée : ${elevee} ${alerteElevee}`,
+                  `- 🟡 Confiance moyenne : ${moyenne} ${alerteMoyenne}`,
+                  `- 📦 Total : ${total}`,
+                  '',
+                  '## 📄 Aperçu du rapport',
+                  '',
+                  '```',
+                  apercu,
+                  '```',
+                  '',
+                  '## 🔗 Rapport complet',
+                  '',
+                  `Téléchargez le rapport complet depuis [Artifacts](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
+                  '',
+                  '## ⚠️ Étapes de traitement recommandées',
+                  '',
+                  '1. Revue immédiate : vérifier toutes les découvertes de confiance élevée',
+                  '2. Rotation des clés : pour toute clé confirmée comme compromise, rotation immédiate chez le fournisseur',
+                  '3. Nettoyage de l\'historique : utiliser git-filter-repo ou BFG pour nettoyer l\'historique Git',
+                  '4. Mesures préventives :',
+                  '   - Utiliser des variables d\'environnement pour les informations sensibles',
+                  '   - Mettre à jour le fichier .gitignore',
+                  '   - Configurer des hooks pre-commit',
+                  '   - Activer GitHub Secret Scanning',
+                  '',
+                  '## 📅 Prochaine analyse',
+                  '',
+                  'La prochaine analyse automatique s\'exécutera demain à la même heure.',
+                  '',
+                  '---',
+                  `*🤖 Cette Issue a été créée automatiquement par GitHub Actions - [Voir le workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/.github/workflows/analyse-planifiee.yml)*`
+                ].join('\n');
+                
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: titreIssue,
+                  body: corpsIssue,
+                  labels: ['securite', 'analyse-auto', 'a-reviser'],
+                  assignees: []
+                });
+              }
+            }
+      
+      - name: ✅ Analyse terminée
+        if: always()
+        run: |
+          if [ "${{ steps.analyser.outputs.problemes_totaux }}" -gt 0 ]; then
+            echo "⚠️ Analyse terminée, ${{ steps.analyser.outputs.problemes_totaux }} problème(s) potentiel(s) détecté(s)"
+            echo "Consultez l'Issue générée et le rapport détaillé dans Artifacts"
+          else
+            echo "✅ Analyse terminée, aucun problème apparent détecté"
+          fi
