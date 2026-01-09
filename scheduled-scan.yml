@@ -61,7 +61,7 @@ jobs:
         id: analyse
         run: |
           echo "Démarrage de la tâche d'analyse automatique..."
-          python scan_github.py --auto --max-repos 50 2>&1 | tee journal_analyse.log
+          python scan_github.py --auto --max-repos 200 2>&1 | tee journal_analyse.log
           
           # Enregistrement du statut de l'analyse
           if [ $? -eq 0 ]; then
